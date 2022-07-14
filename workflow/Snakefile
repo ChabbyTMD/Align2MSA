@@ -1,0 +1,126 @@
+# Import pandas for reading in sample file names in sampleids.csv
+configfile:"config/config.yaml"
+
+# Read in the csv files that contains the run ID's of choice
+import pandas as pd
+metadata = pd.read_csv(config['metadata'], sep=",")
+samples = metadata['sampleID']
+REF = config["ref"]
+sample_path = config["samplepath"]
+
+# Final multiple sequence alignment creation
+rule all:
+    input:
+        "results/msa/out.msa"
+
+# Index reference genome
+rule RefGenomeIndex:
+    input:
+        ref = REF
+    output:
+        idx = touch("resources/reference/.bwa.index")
+    shell:
+        """
+        bwa index {input.ref}
+        """
+
+# Sequence run read mapping
+rule BWAreadMapping:
+    input:
+        ref = REF,
+        reads = expand("{samplepath}{{sample}}_{n}.fastq.gz", samplepath=sample_path , sample=samples, n=[1,2]),
+        idx = "resources/reference/.bwa.index"
+    output:
+        bam = "resources/alignments/{sample}.bam"
+    threads: 8
+    shell:
+        """
+        bwa mem -t {threads} {input.ref} {input.reads} | 
+        samtools view -Sb - > {output.bam}
+        """
+# Alignment sorting
+rule sortAlign:
+    input: 
+        "resources/alignments/{sample}.bam"
+    output:
+        "resources/alignments/{sample}.sorted.bam"
+    shell:
+        "samtools sort -T temp -O bam -o {output} {input}"
+        
+# Alignment indexing
+rule indexBams:
+    input:
+        "resources/alignments/{sample}.bam"
+    output:
+        "resources/alignments/{sample}.bam.bai"
+    shell:
+        "samtools index {input} {output}"
+
+# Variant calling and indel normalisation
+rule variantCall:
+    input:
+        bam = "resources/alignments/{sample}.sorted.bam",
+        index = "resources/alignments/{sample}.bam.bai"
+    output:
+        "resources/bcfs/{sample}.vcf.gz"
+    params:
+        ref = REF
+    shell:
+        """
+        bcftools mpileup -Ou -f {params.ref} {input.bam} | bcftools call -Ou -mv | bcftools norm -f {params.ref} -Oz -o {output}
+        """
+    
+rule tabix:
+    input:
+        calls = "resources/bcfs/{sample}.vcf.gz"
+    output:
+        "resources/bcfs/{sample}.vcf.gz.tbi"
+    shell:
+        """
+        tabix {input.calls}
+        """
+
+# Consensus generation for each sample run
+rule consensusGen:
+    input:
+        bcf = "resources/bcfs/{sample}.vcf.gz"
+    output:
+        "results/consensus_seqs/{sample}.consensus.fa"
+    params:
+        ref = REF
+    shell:
+        """
+        samtools faidx {params.ref} NT_078266.2:48714057-48715148 | bcftools consensus {input.bcf} -o {output}
+        """
+
+# Renaming headers on consensus sequences to reflect run IDS.
+
+rule headerRename:
+    input:
+        runfile = "results/consensus_seqs/{sample}.consensus.fa"
+    output:
+        "results/reheadered_consensus_seqs/{sample}.consensus.fa"
+    shell:
+        """
+        sed 's/'NT_078266.2:48714057-48715148'/'{input.runfile}:48714057-48715148'/' {input.runfile} > {output}
+        """
+
+# Concatentation of sample consensus sequences
+rule sequenceConcat:
+    input:
+        expand("results/reheadered_consensus_seqs/{sample}.consensus.fa", sample=samples)
+    output:
+        "results/concat_seqs/concatenated_consensus.fa"
+    shell:
+        "cat {input} >> {output}"
+
+# Multiple sequence alignment of concatenated sequences
+rule MSA:
+    input:
+        "results/concat_seqs/concatenated_consensus.fa"
+    output:
+        "results/msa/out.msa"
+    shell:
+        """
+        mafft --thread 8 {input} > {output}
+        """

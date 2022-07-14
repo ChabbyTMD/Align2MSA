@@ -1,0 +1,8 @@
+metadata: 
+  config/sampleids.csv
+  
+ref: 
+  resources/reference/NT_078266.2.fasta
+
+samplepath:
+  "/srv/UVRI-LSTM/Ag1000G_loc_15/"
