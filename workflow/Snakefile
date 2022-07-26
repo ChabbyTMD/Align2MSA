@@ -11,7 +11,7 @@ sample_path = config["samplepath"]
 # Final multiple sequence alignment creation
 rule all:
     input:
-        "results/msa/out.msa"
+        "results/msa/test.msa"
 
 # Index reference genome
 rule RefGenomeIndex:
@@ -32,10 +32,12 @@ rule BWAreadMapping:
         idx = "resources/reference/.bwa.index"
     output:
         bam = "resources/alignments/{sample}.bam"
+    log:
+        "logs/BWAreadMapping/{sample}.log"
     threads: 8
     shell:
         """
-        bwa mem -t {threads} {input.ref} {input.reads} | 
+        bwa mem -t {threads} {input.ref} {input.reads} 2> {log} | 
         samtools view -Sb - > {output.bam}
         """
 # Alignment sorting
@@ -44,17 +46,21 @@ rule sortAlign:
         "resources/alignments/{sample}.bam"
     output:
         "resources/alignments/{sample}.sorted.bam"
+    log:
+        "logs/sort/{sample}.log"
     shell:
-        "samtools sort -T temp -O bam -o {output} {input}"
+        "samtools sort -T temp -O bam -o {output} {input} 2> {log}"
         
 # Alignment indexing
 rule indexBams:
     input:
-        "resources/alignments/{sample}.bam"
+        "resources/alignments/{sample}.sorted.bam"
     output:
         "resources/alignments/{sample}.bam.bai"
+    log:
+        "logs/index_bams/{sample}.log"
     shell:
-        "samtools index {input} {output}"
+        "samtools index {input} {output} 2> {log}"
 
 # Variant calling and indel normalisation
 rule variantCall:
@@ -63,11 +69,14 @@ rule variantCall:
         index = "resources/alignments/{sample}.bam.bai"
     output:
         "resources/bcfs/{sample}.vcf.gz"
+    log:
+        mpileup = "logs/mpileup/{sample}.log",
+        call = "logs/bcftools_call/{sample}.log"
     params:
         ref = REF
     shell:
         """
-        bcftools mpileup -Ou -f {params.ref} {input.bam} | bcftools call -Ou -mv | bcftools norm -f {params.ref} -Oz -o {output}
+        bcftools mpileup -Ou -f {params.ref} {input.bam} 2> {log.mpileup} | bcftools call -Ou -mv 2> {log.call} | bcftools norm -f {params.ref} -Oz -o {output} 2> {log.call}
         """
     
 rule tabix:
@@ -83,7 +92,8 @@ rule tabix:
 # Consensus generation for each sample run
 rule consensusGen:
     input:
-        bcf = "resources/bcfs/{sample}.vcf.gz"
+        bcf = "resources/bcfs/{sample}.vcf.gz",
+        tbx = "resources/bcfs/{sample}.vcf.gz.tbi"
     output:
         "results/consensus_seqs/{sample}.consensus.fa"
     params:
@@ -102,7 +112,7 @@ rule headerRename:
         "results/reheadered_consensus_seqs/{sample}.consensus.fa"
     shell:
         """
-        sed 's/'NT_078266.2:48714057-48715148'/'{input.runfile}:48714057-48715148'/' {input.runfile} > {output}
+        sed 's/'NT_078266.2:48714057-48715148'/'{wildcards.sample}:48714057-48715148'/' {input.runfile} > {output}
         """
 
 # Concatentation of sample consensus sequences
@@ -119,8 +129,10 @@ rule MSA:
     input:
         "results/concat_seqs/concatenated_consensus.fa"
     output:
-        "results/msa/out.msa"
+        "results/msa/test.msa"
+    log:
+        "logs/mafft/test.log"
     shell:
         """
-        mafft --thread 8 {input} > {output}
+        mafft --thread 8 {input} > {output} 2> {log}
         """
